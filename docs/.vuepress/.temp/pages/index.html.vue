@@ -1,0 +1,682 @@
+<template><div><h1 id="ios端cr机器人开发流程" tabindex="-1"><a class="header-anchor" href="#ios端cr机器人开发流程" aria-hidden="true">#</a> ios端cr机器人开发流程</h1>
+<h2 id="一、cr机器人流程" tabindex="-1"><a class="header-anchor" href="#一、cr机器人流程" aria-hidden="true">#</a> 一、cr机器人流程</h2>
+<p><img src="@source/.vuepress/assets/d3f1ededd3f512c75209ce16e63b4f8defa7a3f0.png" alt=""></p>
+<p><img src="@source/.vuepress/assets/1ed310f77fe1b886280ca55140fb86b760d2396d.png" alt="输入图片说明"></p>
+<p><strong>使用：</strong></p>
+<ul>
+<li>由代码提交者提交 MR 后在钉钉 写入mr地址并 @机器人。</li>
+<li>由cr机器人自动完成CR过程，处理成功之后会在钉钉群中发送处理结果消息并@代码提交者</li>
+</ul>
+<h2 id="二、平台实现" tabindex="-1"><a class="header-anchor" href="#二、平台实现" aria-hidden="true">#</a> 二、平台实现</h2>
+<h3 id="_0、引申问题" tabindex="-1"><a class="header-anchor" href="#_0、引申问题" aria-hidden="true">#</a> 0、引申问题</h3>
+<ul>
+<li>
+<p><strong>mr列表处理（已解决）</strong></p>
+<ul>
+<li><strong>通过kafka异步消费mr地址</strong></li>
+</ul>
+</li>
+<li>
+<p><strong>对于diffs大文件的处理</strong></p>
+<ul>
+<li>
+<p>无用大文件：大文件如果所设计的文件不需要进行 cr 处理。比如 除代码文件、无用的 json 信息文件</p>
+</li>
+<li>
+<p>有用大文件：如果文件过于大是否需要进行 cr，以及是否拆分，涉及到性能问题</p>
+</li>
+</ul>
+</li>
+<li>
+<p><strong>根据文件类型或者某些逻辑过滤diff</strong></p>
+</li>
+<li>
+<p><strong>根据文件后缀过滤一些不需要的diff</strong></p>
+</li>
+<li>
+<p><strong>过滤掉只涉及删除的diff</strong></p>
+</li>
+<li>
+<p><strong>对于gitlab 没有提供 批量方式一次提交所有的comment，<strong><strong>导致每次需要发送一次http请求，提交一行评论。</strong></strong>（已解决）</strong></p>
+</li>
+<li>
+<p>如果commet过多 调用的http次数过多会存在以下问题：</p>
+<ul>
+<li>解决：cr机器人工具类项目对数据一致性不高可忽略 多次重试失败的极端问题，用kafka解决重试，重试次数为2次，kafka异步解决AI调用耗时和提交comment</li>
+</ul>
+</li>
+</ul>
+<h3 id="_1、流程图" tabindex="-1"><a class="header-anchor" href="#_1、流程图" aria-hidden="true">#</a> 1、流程图</h3>
+<p><img src="@source/.vuepress/assets/2c9b0b9372619bc6afca947b6afb0090ec38c0c7.webp" alt="输入图片说明"></p>
+<p><img src="@source/.vuepress/assets/fae15248d2ada88e0223bebe96ef6044fc735cd7.png" alt="输入图片说明"></p>
+<h3 id="_2、mr和diff信息处理" tabindex="-1"><a class="header-anchor" href="#_2、mr和diff信息处理" aria-hidden="true">#</a> 2、MR和diff信息处理</h3>
+<h4 id="通过mr获取diff信息" tabindex="-1"><a class="header-anchor" href="#通过mr获取diff信息" aria-hidden="true">#</a> 通过mr获取diff信息</h4>
+<div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code>"https<span class="token operator">:</span><span class="token comment">//git.yupaopao.com/terminal/ios/yuer/YRSwiftDemo/merge_requests/1/diffs</span>
+ https<span class="token operator">:</span><span class="token comment">//git.yupaopao.com/terminal/ios/yuer/YRSwiftDemo/merge_requests/2/diffs</span>
+ https<span class="token operator">:</span><span class="token comment">//git.yupaopao.com/terminal/ios/yuer/YRSwiftDemo/merge_requests/3/diffs"</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p>其中 <strong>YRSwuftDemo</strong> 对应的为 项目名称 ，<strong>1 2 3</strong>对应的 请求合并id</p>
+<p><strong>实现步骤：</strong></p>
+<ul>
+<li>
+<p>代码提交人可能会提交多个mr地址，需要对多个地址字符串通过正则表达式（ <strong>\n+| +</strong> ）分别拆分成单个列表mr地址</p>
+</li>
+<li>
+<p>获取单个mr地址 再次通过正则表达式（ <strong>/(\w+)/merge_requests/(\d+)</strong>）获取到 项目名称和请求id</p>
+<p>此时需要通过调用(https://app.yupaopao.com/api/ci/list?curPage=1&amp;platform=iOS&amp;keyword=YRSwiftDemo)
+接口获取对应项目的项目id转换为 gitlab的diff接口调用地址：
+<a href="https://git.yupaopao.com/api/v4/projects/%7Bproject_id%7D/merge_requests/%7Brequest_id%7D/changes" target="_blank" rel="noopener noreferrer">https://git.yupaopao.com/api/v4/projects/{project_id}/merge_requests/{request_id}/changes<ExternalLinkIcon/></a></p>
+</li>
+<li>
+<p>调用该接口获取本次mr请求所有diff信息，对单个diff信息进行封装为 DiffInfo对象</p>
+</li>
+</ul>
+<blockquote>
+<p>一个mr地址会产生多个diffInfo对象
+一个diffInfo对象（<strong>对应于一个具体文件的更改</strong>）
+一个diffInfo对象对应多个diffFeedback对象</p>
+</blockquote>
+<div class="language-java line-numbers-mode" data-ext="java"><pre v-pre class="language-java"><code><span class="token keyword">public</span> <span class="token keyword">class</span> <span class="token class-name">DiffInfo</span> <span class="token punctuation">{</span>
+    <span class="token keyword">private</span> <span class="token class-name">MergeRequestInfo</span> mergeRequestInfo<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> fileSuffix<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> operationType<span class="token punctuation">;</span> <span class="token comment">//new delete modify</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> diff<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> oldPath<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> newPath<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">Map</span><span class="token generics"><span class="token punctuation">&lt;</span><span class="token class-name">String</span><span class="token punctuation">,</span> <span class="token class-name">LineMapping</span><span class="token punctuation">></span></span> lineMap <span class="token punctuation">;</span> <span class="token comment">//diff 去除空格的行代码的新旧行号映射</span>
+
+<span class="token punctuation">}</span>
+
+
+<span class="token keyword">public</span> <span class="token keyword">class</span> <span class="token class-name">LineMapping</span> <span class="token punctuation">{</span>
+    <span class="token keyword">private</span> <span class="token class-name">Integer</span> oldLine<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">Integer</span> newLine<span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+
+<span class="token keyword">public</span> <span class="token keyword">class</span> <span class="token class-name">MergeRequestInfo</span> <span class="token punctuation">{</span>
+    <span class="token doc-comment comment">/**
+     * 合并请求的 基本 SHA、主 SHA 和起始 SHA
+     * 三个SHA的作用：作为接口调用 提交comments 发表评论所需的参数
+     */</span>
+    <span class="token keyword">private</span> <span class="token class-name">Integer</span> id<span class="token punctuation">;</span><span class="token comment">//mr的id 对应gitlab API文档为 merge_request_iid</span>
+    <span class="token keyword">private</span> <span class="token class-name">Integer</span> projectId<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> changesUrl<span class="token punctuation">;</span> <span class="token comment">//获取diffs接口地址 https://git.yupaopao.com/api/v4/projects/7484/merge_requests/1/changes</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> baseSha<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> headSha<span class="token punctuation">;</span> <span class="token comment">//一次mr地址对应的sha</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> startSha<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> margeRequestUrl<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> title<span class="token punctuation">;</span><span class="token comment">//mr的标题</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> description<span class="token punctuation">;</span><span class="token comment">//mr的描述</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> atUserLoginName<span class="token punctuation">;</span><span class="token comment">//钉钉@cr机器人的那个人，用作发送消息</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> atUserGroupChat<span class="token punctuation">;</span><span class="token comment">//钉钉@cr机器人的群聊</span>
+<span class="token punctuation">}</span>
+
+<span class="token keyword">public</span> <span class="token keyword">class</span> <span class="token class-name">DiffFeedback</span> <span class="token punctuation">{</span>
+
+    <span class="token keyword">private</span> <span class="token class-name">DiffInfo</span> diffInfo<span class="token punctuation">;</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> codeContent<span class="token punctuation">;</span> <span class="token comment">//该行代码</span>
+    <span class="token keyword">private</span> <span class="token class-name">String</span> amendmentBody<span class="token punctuation">;</span><span class="token comment">//修改意见</span>
+    <span class="token keyword">private</span> <span class="token class-name">LineMapping</span> lineMapping<span class="token punctuation">;</span> <span class="token comment">//要commit的代码行号</span>
+
+
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p><strong>对象实例：</strong></p>
+<div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code><span class="token punctuation">{</span>
+    <span class="token property">"diff"</span><span class="token operator">:</span> <span class="token string">"@@ -16,6 +16,18 @@ import YppSoraka\n import MJExtension\n import UIKit\n \n+import YppLayout\n+import YppBubbleMaker\n+import YppShare\n+\n+@objcMembers public class SwiftCallOC: NSObject {\n+     Public func invokEAll() {\n+\n+            DispatchQueue.main.asyncAfter(deadline: .now()+3, execute: {\n+                self.invokeAFN()\n+            })\n+        }\n+}\n @objcMembers public class SwiftCallOC: NSObject {\n     public func invokeAll() {\n         \n"</span><span class="token punctuation">,</span>
+    <span class="token property">"fileSuffix"</span><span class="token operator">:</span> <span class="token string">"swift"</span><span class="token punctuation">,</span>
+    <span class="token property">"lineMap"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">""</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">33</span><span class="token punctuation">,</span>
+            <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">21</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+@objcMemberspublicclassSwiftCallOC:NSObject{"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">23</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"importMJExtension"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">16</span><span class="token punctuation">,</span>
+            <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">16</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"@objcMemberspublicclassSwiftCallOC:NSObject{"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">31</span><span class="token punctuation">,</span>
+            <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">19</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+PublicfuncinvokEAll(){"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">24</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">25</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+importYppShare"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">21</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">30</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"importUIKit"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">17</span><span class="token punctuation">,</span>
+            <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">17</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"publicfuncinvokeAll(){"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">32</span><span class="token punctuation">,</span>
+            <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">20</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+})"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">28</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+self.invokeAFN()"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">27</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+DispatchQueue.main.asyncAfter(deadline:.now()+3,execute:{"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">26</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+importYppLayout"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">19</span>
+        <span class="token punctuation">}</span><span class="token punctuation">,</span>
+        <span class="token property">"+importYppBubbleMaker"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+            <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">20</span>
+        <span class="token punctuation">}</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"mergeRequestInfo"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"atUserGroupChat"</span><span class="token operator">:</span> <span class="token string">"语音IOS代码CR群"</span><span class="token punctuation">,</span>
+        <span class="token property">"atUserLoginName"</span><span class="token operator">:</span> <span class="token string">"huangxiaolong"</span><span class="token punctuation">,</span>
+        <span class="token property">"baseSha"</span><span class="token operator">:</span> <span class="token string">"6467f8d27a2fd1ce76d068f6ba177dbf1c7ce562"</span><span class="token punctuation">,</span>
+        <span class="token property">"changesUrl"</span><span class="token operator">:</span> <span class="token string">"https://git.yupaopao.com/api/v4/projects/7484/merge_requests/3/changes"</span><span class="token punctuation">,</span>
+        <span class="token property">"description"</span><span class="token operator">:</span> <span class="token string">""</span><span class="token punctuation">,</span>
+        <span class="token property">"headSha"</span><span class="token operator">:</span> <span class="token string">"7fd4ab574ee72008338ca4b978108185abc87388"</span><span class="token punctuation">,</span>
+        <span class="token property">"id"</span><span class="token operator">:</span> <span class="token number">3</span><span class="token punctuation">,</span>
+        <span class="token property">"margeRequestUrl"</span><span class="token operator">:</span> <span class="token string">"https://git.yupaopao.com/terminal/ios/yuer/YRSwiftDemo/merge_requests/3"</span><span class="token punctuation">,</span>
+        <span class="token property">"projectId"</span><span class="token operator">:</span> <span class="token number">7484</span><span class="token punctuation">,</span>
+        <span class="token property">"startSha"</span><span class="token operator">:</span> <span class="token string">"2bb90c392ddd6a9220f8d5edec4908afce237cd9"</span><span class="token punctuation">,</span>
+        <span class="token property">"title"</span><span class="token operator">:</span> <span class="token string">"导入了包"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"newPath"</span><span class="token operator">:</span> <span class="token string">"Pods/Classes/SwiftCallOC.swift"</span><span class="token punctuation">,</span>
+    <span class="token property">"oldPath"</span><span class="token operator">:</span> <span class="token string">"Pods/Classes/SwiftCallOC.swift"</span><span class="token punctuation">,</span>
+    <span class="token property">"operationType"</span><span class="token operator">:</span> <span class="token string">"modify"</span>
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><h4 id="diff格式" tabindex="-1"><a class="header-anchor" href="#diff格式" aria-hidden="true">#</a> diff格式</h4>
+<blockquote>
+<p>@@ -14,7 +14,7 @@
+-14,7 表示原文件的起始行是第14行。而<code v-pre>,7</code>表示旧文件从14行开始的连续7行
++14,7 表示新文件的起始行是第14行。<code v-pre>,7</code>表示新文件从14行开始的连续7行
+文件中 - + 即表示 旧代码和新代码，未标识- +的即为原始上下代码参照</p>
+</blockquote>
+<p>原始diff字符串：</p>
+<pre><code>@@ -14,7 +14,7 @@ import AFNetworking
+
+import YppAccountService
+
+import YppSoraka
+
+import MJExtension
+
+-
+
++import UIKit
+
+@objcMembers public class SwiftCallOC: NSObject {
+
+public func invokeAll() { 
+</code></pre>
+<p><img src="@source/.vuepress/assets/0493a05a4833f0780b1200ae360e211c0b1768a6.png" alt="输入图片说明"></p>
+<h3 id="_3、变更行计算" tabindex="-1"><a class="header-anchor" href="#_3、变更行计算" aria-hidden="true">#</a> 3、变更行计算</h3>
+<p><img src="@source/.vuepress/assets/f72f38e9ccc3dc81d76ad01809ed96ef39dec822.png" alt="输入图片说明"></p>
+<p><em><strong>计算变更行：</strong></em></p>
+<p>以 @@ -16,6 +16,18 @@ <strong>开始 获取 <strong>旧起始行16</strong> 和</strong>新起始行16**，以\n分割一行代码。</p>
+<ul>
+<li>
+<p><strong>+ 号开头</strong> 新行+1，旧行不变</p>
+</li>
+<li>
+<p><strong>- 号开头</strong> 旧行+1 新行不变</p>
+</li>
+<li>
+<p><strong>不出现-+</strong> 新旧行同时+1</p>
+</li>
+</ul>
+<div class="language-python line-numbers-mode" data-ext="py"><pre v-pre class="language-python"><code>@@ <span class="token operator">-</span><span class="token number">17</span><span class="token punctuation">,</span><span class="token number">6</span> <span class="token operator">+</span><span class="token number">17</span><span class="token punctuation">,</span><span class="token number">16</span> @@ <span class="token keyword">import</span> MJExtension
+
+
+ <span class="token decorator annotation punctuation">@objcMembers</span> public <span class="token keyword">class</span> <span class="token class-name">SwiftCallOC</span><span class="token punctuation">:</span> NSObject <span class="token punctuation">{</span>
+<span class="token operator">+</span>    
+<span class="token operator">+</span>    var callback<span class="token punctuation">:</span> <span class="token punctuation">(</span><span class="token punctuation">(</span>Int<span class="token punctuation">)</span> <span class="token operator">-</span><span class="token operator">></span> Void<span class="token punctuation">)</span>?
+<span class="token operator">+</span>    
+<span class="token operator">+</span>    init<span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+<span class="token operator">+</span>        callback <span class="token operator">=</span> <span class="token punctuation">{</span> i <span class="token keyword">in</span>
+<span class="token operator">+</span>            self<span class="token punctuation">.</span>printSomething<span class="token punctuation">(</span>i<span class="token punctuation">)</span>
+<span class="token operator">+</span>        <span class="token punctuation">}</span>
+<span class="token operator">+</span>    <span class="token punctuation">}</span>
+<span class="token operator">+</span>    
+<span class="token operator">+</span>    
+     public func invokeAll<span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+
+         DispatchQueue<span class="token punctuation">.</span>main<span class="token punctuation">.</span>asyncAfter<span class="token punctuation">(</span>deadline<span class="token punctuation">:</span> <span class="token punctuation">.</span>now<span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token operator">+</span><span class="token number">3</span><span class="token punctuation">,</span> execute<span class="token punctuation">:</span> <span class="token punctuation">{</span>
+@@ <span class="token operator">-</span><span class="token number">39</span><span class="token punctuation">,</span><span class="token number">7</span> <span class="token operator">+</span><span class="token number">49</span><span class="token punctuation">,</span><span class="token number">7</span> @@ <span class="token keyword">import</span> MJExtension
+
+             self<span class="token punctuation">.</span>invokeYppSoraka<span class="token punctuation">(</span>event<span class="token punctuation">:</span> <span class="token string">"数据"</span><span class="token punctuation">,</span> args<span class="token punctuation">:</span> string<span class="token punctuation">)</span>
+
+<span class="token operator">-</span>            let label <span class="token operator">=</span> UILabel<span class="token punctuation">.</span>init<span class="token punctuation">(</span>frame<span class="token punctuation">:</span> CGRect<span class="token punctuation">(</span>x<span class="token punctuation">:</span> <span class="token number">0</span><span class="token punctuation">,</span> y<span class="token punctuation">:</span> <span class="token number">100</span><span class="token punctuation">,</span> width<span class="token punctuation">:</span> self<span class="token punctuation">.</span>currentView<span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span>frame<span class="token punctuation">.</span>size<span class="token punctuation">.</span>width<span class="token punctuation">,</span> height<span class="token punctuation">:</span> self<span class="token punctuation">.</span>currentView<span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span>frame<span class="token punctuation">.</span>size<span class="token punctuation">.</span>height <span class="token operator">-</span> <span class="token number">200</span><span class="token punctuation">)</span><span class="token punctuation">)</span>
+<span class="token operator">+</span><span class="token operator">//</span>            let label <span class="token operator">=</span> UILabel<span class="token punctuation">.</span>init<span class="token punctuation">(</span>frame<span class="token punctuation">:</span> CGRect<span class="token punctuation">(</span>x<span class="token punctuation">:</span> <span class="token number">0</span><span class="token punctuation">,</span> y<span class="token punctuation">:</span> <span class="token number">100</span><span class="token punctuation">,</span> width<span class="token punctuation">:</span> self<span class="token punctuation">.</span>currentView<span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span>frame<span class="token punctuation">.</span>size<span class="token punctuation">.</span>width<span class="token punctuation">,</span> height<span class="token punctuation">:</span> self<span class="token punctuation">.</span>currentView<span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span>frame<span class="token punctuation">.</span>size<span class="token punctuation">.</span>height <span class="token operator">-</span> <span class="token number">200</span><span class="token punctuation">)</span><span class="token punctuation">)</span>
+             self<span class="token punctuation">.</span>currentView<span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span>addSubview<span class="token punctuation">(</span>label<span class="token punctuation">)</span>
+             label<span class="token punctuation">.</span>backgroundColor <span class="token operator">=</span> UIColor<span class="token punctuation">.</span>white
+             label<span class="token punctuation">.</span>numberOfLines <span class="token operator">=</span> <span class="token number">0</span><span class="token punctuation">;</span>
+@@ <span class="token operator">-</span><span class="token number">55</span><span class="token punctuation">,</span><span class="token number">7</span> <span class="token operator">+</span><span class="token number">65</span><span class="token punctuation">,</span><span class="token number">8</span> @@ <span class="token keyword">import</span> MJExtension
+     <span class="token punctuation">}</span>
+
+     func currentView<span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">-</span><span class="token operator">></span> UIView <span class="token punctuation">{</span>
+<span class="token operator">-</span>        guard let rootView <span class="token operator">=</span> UIApplication<span class="token punctuation">.</span>shared<span class="token punctuation">.</span>keyWindow?<span class="token punctuation">.</span>rootViewController?<span class="token punctuation">.</span>view <span class="token keyword">else</span> <span class="token punctuation">{</span> <span class="token keyword">return</span> UIView<span class="token punctuation">.</span>init<span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">}</span>
+<span class="token operator">+</span><span class="token operator">//</span>        guard let rootView <span class="token operator">=</span> UIApplication<span class="token punctuation">.</span>shared<span class="token punctuation">.</span>keyWindow?<span class="token punctuation">.</span>rootViewController?<span class="token punctuation">.</span>view <span class="token keyword">else</span> <span class="token punctuation">{</span> <span class="token keyword">return</span> UIView<span class="token punctuation">.</span>init<span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">}</span>
+<span class="token operator">+</span>        guard let rootView <span class="token operator">=</span> UIApplication<span class="token punctuation">.</span>shared<span class="token punctuation">.</span>delegete?<span class="token punctuation">.</span>windows?<span class="token punctuation">.</span>first <span class="token keyword">else</span> <span class="token punctuation">{</span> <span class="token keyword">return</span> UIView<span class="token punctuation">.</span>init<span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">}</span>
+         <span class="token keyword">return</span> rootView<span class="token punctuation">;</span>
+     <span class="token punctuation">}</span>
+
+@@ <span class="token operator">-</span><span class="token number">64</span><span class="token punctuation">,</span><span class="token number">6</span> <span class="token operator">+</span><span class="token number">75</span><span class="token punctuation">,</span><span class="token number">13</span> @@ <span class="token keyword">import</span> MJExtension
+          guard let <span class="token builtin">str</span> <span class="token operator">=</span> String<span class="token punctuation">(</span>data<span class="token punctuation">:</span> data!<span class="token punctuation">,</span> encoding<span class="token punctuation">:</span> String<span class="token punctuation">.</span>Encoding<span class="token punctuation">.</span>utf8<span class="token punctuation">)</span> <span class="token keyword">else</span> <span class="token punctuation">{</span> <span class="token keyword">return</span> <span class="token string">""</span> <span class="token punctuation">}</span>
+          <span class="token keyword">return</span> <span class="token builtin">str</span>
+      <span class="token punctuation">}</span>
+<span class="token operator">+</span>    
+<span class="token operator">+</span>    func printSomething<span class="token punctuation">(</span>_ i<span class="token punctuation">:</span> Int<span class="token punctuation">)</span> <span class="token punctuation">{</span>
+<span class="token operator">+</span>        <span class="token operator">//</span> other code <span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span>
+<span class="token operator">+</span>        <span class="token keyword">print</span><span class="token punctuation">(</span><span class="token string">"print: \(i)"</span><span class="token punctuation">)</span>
+<span class="token operator">+</span>        printSomething<span class="token punctuation">(</span>i<span class="token punctuation">)</span>
+<span class="token operator">+</span>        <span class="token operator">//</span> other code <span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span>
+<span class="token operator">+</span>    <span class="token punctuation">}</span>
+ <span class="token punctuation">}</span>
+
+
+
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p><strong>转换为LineMapping 对象格式：</strong></p>
+<div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code><span class="token punctuation">{</span>
+    <span class="token property">""</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">87</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">69</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"-letlabel=UILabel.init(frame:CGRect(x:0,y:100,width:self.currentView().frame.size.width,height:self.currentView().frame.size.height-200))"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">42</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"label.numberOfLines=0;"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">55</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">45</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"returnstr"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">76</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">65</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"guardletstr=String(data:data!,encoding:String.Encoding.utf8)else{return\"\"}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">75</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">64</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"label.backgroundColor=UIColor.white"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">54</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">44</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+init(){"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">23</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"publicfuncinvokeAll(){"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">30</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">20</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+print(\"print:\(i)\")"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">81</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+guardletrootView=UIApplication.shared.delegete?.windows?.firstelse{returnUIView.init()}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">69</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"self.invokeYppSoraka(event:\"数据\",args:string)"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">50</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">40</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+//letlabel=UILabel.init(frame:CGRect(x:0,y:100,width:self.currentView().frame.size.width,height:self.currentView().frame.size.height-200))"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">52</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+printSomething(i)"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">82</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+//guardletrootView=UIApplication.shared.keyWindow?.rootViewController?.viewelse{returnUIView.init()}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">68</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+funcprintSomething(_i:Int){"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">79</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+//othercode....."</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">83</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"@objcMemberspublicclassSwiftCallOC:NSObject{"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">19</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">19</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">78</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+callback={iin"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">24</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"self.currentView().addSubview(label)"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">53</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">43</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+varcallback:((Int)->Void)?"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">21</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">84</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"DispatchQueue.main.asyncAfter(deadline:.now()+3,execute:{"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">32</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">22</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"+self.printSomething(i)"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">25</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"-guardletrootView=UIApplication.shared.keyWindow?.rootViewController?.viewelse{returnUIView.init()}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">58</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"}"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">85</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">67</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"funccurrentView()->UIView{"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">67</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">57</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"returnrootView;"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"newLine"</span><span class="token operator">:</span> <span class="token number">70</span><span class="token punctuation">,</span>
+        <span class="token property">"oldLine"</span><span class="token operator">:</span> <span class="token number">59</span>
+    <span class="token punctuation">}</span>
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><div class="language-java line-numbers-mode" data-ext="java"><pre v-pre class="language-java"><code><span class="token keyword">private</span> <span class="token keyword">void</span> <span class="token function">computeDiffChangedLine</span><span class="token punctuation">(</span><span class="token class-name">DiffInfo</span> diff<span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token keyword">if</span> <span class="token punctuation">(</span>diff <span class="token operator">==</span> <span class="token keyword">null</span> <span class="token operator">||</span> diff<span class="token punctuation">.</span><span class="token function">getDiff</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">==</span> <span class="token keyword">null</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+        <span class="token keyword">return</span><span class="token punctuation">;</span>
+    <span class="token punctuation">}</span>
+    <span class="token comment">//清除所有空格 以换行分割代表一行代码，再去除空格</span>
+    <span class="token class-name">String</span> diff_content <span class="token operator">=</span> diff<span class="token punctuation">.</span><span class="token function">getDiff</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+    <span class="token class-name">List</span><span class="token generics"><span class="token punctuation">&lt;</span><span class="token class-name">String</span><span class="token punctuation">></span></span> linesList <span class="token operator">=</span> <span class="token class-name">Arrays</span><span class="token punctuation">.</span><span class="token function">stream</span><span class="token punctuation">(</span>diff_content<span class="token punctuation">.</span><span class="token function">split</span><span class="token punctuation">(</span><span class="token string">"\n"</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">map</span><span class="token punctuation">(</span>s <span class="token operator">-></span> s<span class="token punctuation">.</span><span class="token function">replace</span><span class="token punctuation">(</span><span class="token string">" "</span><span class="token punctuation">,</span> <span class="token string">""</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">collect</span><span class="token punctuation">(</span><span class="token class-name">Collectors</span><span class="token punctuation">.</span><span class="token function">toList</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+
+    <span class="token keyword">int</span> new_file_line <span class="token operator">=</span> <span class="token number">0</span><span class="token punctuation">;</span>
+    <span class="token keyword">int</span> old_file_line <span class="token operator">=</span> <span class="token number">0</span><span class="token punctuation">;</span>
+    <span class="token class-name">Map</span><span class="token generics"><span class="token punctuation">&lt;</span><span class="token class-name">String</span><span class="token punctuation">,</span> <span class="token class-name">LineMapping</span><span class="token punctuation">></span></span> line_map <span class="token operator">=</span> <span class="token keyword">new</span> <span class="token class-name">HashMap</span><span class="token generics"><span class="token punctuation">&lt;</span><span class="token punctuation">></span></span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+
+    <span class="token keyword">for</span> <span class="token punctuation">(</span><span class="token class-name">String</span> line <span class="token operator">:</span> linesList<span class="token punctuation">)</span> <span class="token punctuation">{</span>
+        <span class="token comment">//获取起始 新行，旧行</span>
+        <span class="token keyword">if</span> <span class="token punctuation">(</span>line<span class="token punctuation">.</span><span class="token function">startsWith</span><span class="token punctuation">(</span><span class="token string">"@@"</span><span class="token punctuation">)</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+            <span class="token class-name">String</span><span class="token punctuation">[</span><span class="token punctuation">]</span> chars <span class="token operator">=</span> line<span class="token punctuation">.</span><span class="token function">split</span><span class="token punctuation">(</span><span class="token string">"@@"</span><span class="token punctuation">)</span><span class="token punctuation">[</span><span class="token number">1</span><span class="token punctuation">]</span><span class="token punctuation">.</span><span class="token function">split</span><span class="token punctuation">(</span><span class="token string">"[-,+]"</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// ['', '39', '7', '49', '7', 'importMJExtension']</span>
+            old_file_line <span class="token operator">=</span> <span class="token class-name">Integer</span><span class="token punctuation">.</span><span class="token function">parseInt</span><span class="token punctuation">(</span>chars<span class="token punctuation">[</span><span class="token number">1</span><span class="token punctuation">]</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+            new_file_line <span class="token operator">=</span> <span class="token class-name">Integer</span><span class="token punctuation">.</span><span class="token function">parseInt</span><span class="token punctuation">(</span>chars<span class="token punctuation">[</span><span class="token number">3</span><span class="token punctuation">]</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+
+        <span class="token punctuation">}</span> <span class="token keyword">else</span> <span class="token punctuation">{</span>
+
+            <span class="token keyword">if</span> <span class="token punctuation">(</span>line<span class="token punctuation">.</span><span class="token function">startsWith</span><span class="token punctuation">(</span><span class="token string">"-"</span><span class="token punctuation">)</span><span class="token punctuation">)</span> <span class="token punctuation">{</span><span class="token comment">//删除代码行</span>
+                line_map<span class="token punctuation">.</span><span class="token function">put</span><span class="token punctuation">(</span>line<span class="token punctuation">,</span> <span class="token keyword">new</span> <span class="token class-name">LineMapping</span><span class="token punctuation">(</span>old_file_line<span class="token punctuation">,</span> <span class="token keyword">null</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+                old_file_line<span class="token operator">++</span><span class="token punctuation">;</span>
+
+            <span class="token punctuation">}</span> <span class="token keyword">else</span> <span class="token keyword">if</span> <span class="token punctuation">(</span>line<span class="token punctuation">.</span><span class="token function">startsWith</span><span class="token punctuation">(</span><span class="token string">"+"</span><span class="token punctuation">)</span><span class="token punctuation">)</span> <span class="token punctuation">{</span><span class="token comment">//新增代码行</span>
+                line_map<span class="token punctuation">.</span><span class="token function">put</span><span class="token punctuation">(</span>line<span class="token punctuation">,</span> <span class="token keyword">new</span> <span class="token class-name">LineMapping</span><span class="token punctuation">(</span><span class="token keyword">null</span><span class="token punctuation">,</span> new_file_line<span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+                new_file_line<span class="token operator">++</span><span class="token punctuation">;</span>
+            <span class="token punctuation">}</span> <span class="token keyword">else</span> <span class="token punctuation">{</span><span class="token comment">//未更改的都+1</span>
+                line_map<span class="token punctuation">.</span><span class="token function">put</span><span class="token punctuation">(</span>line<span class="token punctuation">,</span> <span class="token keyword">new</span> <span class="token class-name">LineMapping</span><span class="token punctuation">(</span>old_file_line<span class="token punctuation">,</span> new_file_line<span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+                old_file_line<span class="token operator">++</span><span class="token punctuation">;</span>
+                new_file_line<span class="token operator">++</span><span class="token punctuation">;</span>
+            <span class="token punctuation">}</span>
+
+        <span class="token punctuation">}</span>
+    <span class="token punctuation">}</span>
+    diff<span class="token punctuation">.</span><span class="token function">setLineMap</span><span class="token punctuation">(</span>line_map<span class="token punctuation">)</span><span class="token punctuation">;</span>
+
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><h3 id="_4、ai结果模板与字符串相似度匹配" tabindex="-1"><a class="header-anchor" href="#_4、ai结果模板与字符串相似度匹配" aria-hidden="true">#</a> 4、AI结果模板与字符串相似度匹配</h3>
+<p><strong>content中原始信息，从reviews中解析数组，放入Array，对content与LineMapping做等值匹配和模糊匹配</strong></p>
+<div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code><span class="token punctuation">{</span>
+    <span class="token property">"id"</span><span class="token operator">:</span> <span class="token string">"cqu56gmbi7sbqkl0me60"</span><span class="token punctuation">,</span>
+    <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"kimi"</span><span class="token punctuation">,</span>
+    <span class="token property">"object"</span><span class="token operator">:</span> <span class="token string">"chat.completion"</span><span class="token punctuation">,</span>
+    <span class="token property">"choices"</span><span class="token operator">:</span> <span class="token punctuation">[</span>
+        <span class="token punctuation">{</span>
+            <span class="token property">"index"</span><span class="token operator">:</span> <span class="token number">0</span><span class="token punctuation">,</span>
+            <span class="token property">"message"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+                <span class="token property">"role"</span><span class="token operator">:</span> <span class="token string">"assistant"</span><span class="token punctuation">,</span>
+                <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"{\n  \"reviews\": [\n    {\n      \"content\": \"+    var callback: ((Int) -> Void)?\",\n      \"comment\": \"定义了一个回调闭包，但是没有在文档或注释中说明其用途和使用场景，建议添加相应的注释说明。\"\n    },\n    {\n      \"content\": \"+        callback = { i in\",\n      \"comment\": \"闭包的初始化方式是正确的，但是闭包内部调用了自身，这可能导致无限递归，需要确保逻辑上是安全的，否则可能引起栈溢出。\"\n    },\n    {\n      \"content\": \"+//            let label = UILabel.init(frame: CGRect(x: 0, y: 100, width: self.currentView().frame.size.width, height: self.currentView().frame.size.height - 200))\",\n      \"comment\": \"这行代码被注释掉了，如果这是有意为之，请确保有相应的替代逻辑。如果是为了删除，那么注释它是一个好的做法。\"\n    },\n    {\n      \"content\": \"+        guard let rootView = UIApplication.shared.delegete?.windows?.first else { return UIView.init() }\",\n      \"comment\": \"这里将 `delegate` 错误地写成了 `delegete`，并且使用 `UIApplication.shared.delegete?.windows?.first` 来获取根视图可能不是最佳实践，因为 `delegate` 属性在 iOS 13 中已被废弃。建议使用 `SceneDelegate` 或者 `UIWindowScene` 来获取当前的视图窗口。\"\n    },\n    {\n      \"content\": \"+    func printSomething(_ i: Int) {\",\n      \"comment\": \"这个方法同样存在无限递归的问题，`printSomething(i)` 应该被修改以避免无限循环。此外，方法的实现细节被省略了，建议添加必要的日志或其他输出以确保方法按预期工作。\"\n    }\n  ]\n}"</span>
+            <span class="token punctuation">}</span><span class="token punctuation">,</span>
+            <span class="token property">"finish_reason"</span><span class="token operator">:</span> <span class="token string">"stop"</span>
+        <span class="token punctuation">}</span>
+    <span class="token punctuation">]</span><span class="token punctuation">,</span>
+    <span class="token property">"usage"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"prompt_tokens"</span><span class="token operator">:</span> <span class="token number">1</span><span class="token punctuation">,</span>
+        <span class="token property">"completion_tokens"</span><span class="token operator">:</span> <span class="token number">1</span><span class="token punctuation">,</span>
+        <span class="token property">"total_tokens"</span><span class="token operator">:</span> <span class="token number">2</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token property">"created"</span><span class="token operator">:</span> <span class="token number">1723618114</span>
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code><span class="token punctuation">{</span>
+  <span class="token property">"reviews"</span><span class="token operator">:</span> <span class="token punctuation">[</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+    var callback: ((Int) -> Void)?"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"新增的`callback`属性是一个很好的实践，它允许类的使用者自定义行为。但是，最好在文档或注释中说明这个属性的用途和使用方式。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+        callback = { i in"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"这里使用了闭包来初始化`callback`，但闭包内部又调用了`self.printSomething(i)`，这可能会导致循环引用，如果`printSomething`方法内部也持有`self`的强引用的话。建议检查`printSomething`方法实现，确保没有循环引用的问题。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+        self.printSomething(i)"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"如果`printSomething`方法内部有递归调用，需要确保有退出递归的条件，否则可能会导致栈溢出。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"-            let label = UILabel.init(frame: CGRect(x: 0, y: 100, width: self.currentView().frame.size.width, height: self.currentView().frame.size.height - 200))"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"原来的代码被注释掉了，看起来是想移除UILabel的创建。如果这是有意为之，确保移除UILabel后，相关的业务逻辑仍然正确。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+        guard let rootView = UIApplication.shared.delegete?.windows?.first else { return UIView.init() }"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"这里将`UIApplication.shared.keyWindow?.rootViewController?.view`更改为`UIApplication.shared.delegete?.windows?.first`，这个改动可能是为了获取当前活跃的窗口。但是，使用`delegete`可能是一个拼写错误，应该是`delegate`。同时，`windows`应该是`delegate?.windowScenes?.first?.windows?.first`，以确保获取到正确的窗口。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+    func printSomething(_ i: Int) {"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"新增的`printSomething`方法看起来是用于打印信息，但是方法内部的递归调用没有明确的退出条件，这可能会导致无限递归和程序崩溃。需要添加适当的逻辑来终止递归。"</span>
+    <span class="token punctuation">}</span>
+  <span class="token punctuation">]</span>
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p><strong>算法如下：</strong></p>
+<div class="language-java line-numbers-mode" data-ext="java"><pre v-pre class="language-java"><code>  <span class="token keyword">private</span> <span class="token keyword">boolean</span> <span class="token function">matchCodeLineNumber</span><span class="token punctuation">(</span><span class="token class-name">DiffFeedback</span> diffFeedback<span class="token punctuation">)</span> <span class="token punctuation">{</span>
+        <span class="token comment">//匹配对应行</span>
+        <span class="token class-name">String</span> lineCode <span class="token operator">=</span> diffFeedback<span class="token punctuation">.</span><span class="token function">getCodeContent</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">replace</span><span class="token punctuation">(</span><span class="token string">" "</span><span class="token punctuation">,</span> <span class="token string">""</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+        <span class="token class-name">Map</span><span class="token generics"><span class="token punctuation">&lt;</span><span class="token class-name">String</span><span class="token punctuation">,</span> <span class="token class-name">LineMapping</span><span class="token punctuation">></span></span> lineMap <span class="token operator">=</span> diffFeedback<span class="token punctuation">.</span><span class="token function">getDiffInfo</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">getLineMap</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+        <span class="token comment">//等值匹配</span>
+        <span class="token class-name">LineMapping</span> mapping <span class="token operator">=</span> lineMap<span class="token punctuation">.</span><span class="token function">get</span><span class="token punctuation">(</span>lineCode<span class="token punctuation">)</span><span class="token punctuation">;</span>
+        <span class="token comment">//行号等值匹配失败 模糊匹配</span>
+        <span class="token keyword">if</span> <span class="token punctuation">(</span>mapping <span class="token operator">==</span> <span class="token keyword">null</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+
+            <span class="token comment">//字符串匹配度最高匹配</span>
+            <span class="token comment">//通过编辑距离算法 获取匹配度最高的</span>
+            <span class="token class-name">Map<span class="token punctuation">.</span>Entry</span><span class="token generics"><span class="token punctuation">&lt;</span><span class="token class-name">String</span><span class="token punctuation">,</span> <span class="token class-name">LineMapping</span><span class="token punctuation">></span></span> entry <span class="token operator">=</span> entries<span class="token punctuation">.</span><span class="token function">stream</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">max</span><span class="token punctuation">(</span><span class="token punctuation">(</span>k<span class="token punctuation">,</span> v<span class="token punctuation">)</span> <span class="token operator">-></span> <span class="token punctuation">{</span>
+                <span class="token keyword">int</span> kk <span class="token operator">=</span> <span class="token function">calculateSimilarity</span><span class="token punctuation">(</span>k<span class="token punctuation">.</span><span class="token function">getKey</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">,</span> lineCode<span class="token punctuation">)</span><span class="token punctuation">;</span>
+                <span class="token keyword">int</span> vv <span class="token operator">=</span> <span class="token function">calculateSimilarity</span><span class="token punctuation">(</span>v<span class="token punctuation">.</span><span class="token function">getKey</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">,</span> lineCode<span class="token punctuation">)</span><span class="token punctuation">;</span>
+                <span class="token keyword">return</span> kk <span class="token operator">-</span> vv<span class="token punctuation">;</span>
+            <span class="token punctuation">}</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">orElse</span><span class="token punctuation">(</span><span class="token keyword">null</span><span class="token punctuation">)</span><span class="token punctuation">;</span>          
+        <span class="token punctuation">}</span>
+
+    <span class="token punctuation">}</span>
+
+
+    <span class="token keyword">private</span> <span class="token keyword">static</span> <span class="token keyword">int</span> <span class="token function">calculateSimilarity</span><span class="token punctuation">(</span><span class="token class-name">String</span> input<span class="token punctuation">,</span> <span class="token class-name">String</span> target<span class="token punctuation">)</span> <span class="token punctuation">{</span>
+        <span class="token comment">// 计算两个字符串的最大长度</span>
+        <span class="token keyword">int</span> maxLength <span class="token operator">=</span> <span class="token class-name">Math</span><span class="token punctuation">.</span><span class="token function">max</span><span class="token punctuation">(</span>input<span class="token punctuation">.</span><span class="token function">length</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">,</span> target<span class="token punctuation">.</span><span class="token function">length</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+        <span class="token comment">// 编辑距离算法 计算Levenshtein距离</span>
+        <span class="token class-name">Integer</span> editDistance <span class="token operator">=</span> levenshteinDistance<span class="token punctuation">.</span><span class="token function">apply</span><span class="token punctuation">(</span>input<span class="token punctuation">,</span> target<span class="token punctuation">)</span><span class="token punctuation">;</span>
+        <span class="token comment">// 根据Levenshtein距离计算相似度</span>
+        <span class="token keyword">return</span> <span class="token punctuation">(</span><span class="token keyword">int</span><span class="token punctuation">)</span> <span class="token punctuation">(</span><span class="token punctuation">(</span><span class="token number">1.0</span> <span class="token operator">-</span> <span class="token punctuation">(</span><span class="token keyword">double</span><span class="token punctuation">)</span> editDistance <span class="token operator">/</span> maxLength<span class="token punctuation">)</span> <span class="token operator">*</span> <span class="token number">100</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+    <span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><h3 id="_5、回写comments到gitlab" tabindex="-1"><a class="header-anchor" href="#_5、回写comments到gitlab" aria-hidden="true">#</a> 5、回写comments到Gitlab</h3>
+<h4 id="提交comment接口调用" tabindex="-1"><a class="header-anchor" href="#提交comment接口调用" aria-hidden="true">#</a> 提交comment接口调用</h4>
+<p><strong>gitlab接口文档 ：</strong><a href="https://docs.gitlab.com/ee/api/discussions.html#create-new-merge-request-thread" target="_blank" rel="noopener noreferrer">Discussions API | GitLab<ExternalLinkIcon/></a></p>
+<p>回填comment接口 POST <a href="https://git.yupaopao.com/api/v4/projects/7484/merge%5C_requests/1/discussions" target="_blank" rel="noopener noreferrer">https://git.yupaopao.com/api/v4/projects/7484/merge_requests/1/discussions<ExternalLinkIcon/></a></p>
+<p>7484对应project_id 1对应request_iid</p>
+<div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code><span class="token punctuation">{</span>
+    <span class="token property">"body"</span><span class="token operator">:</span><span class="token string">"postman接口测试内容"</span><span class="token punctuation">,</span>
+    <span class="token property">"position"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+                    <span class="token property">"base_sha"</span><span class="token operator">:</span> <span class="token string">"cdd6cf0e8e0dd3f6fd3f9435d648ef46927d279b"</span><span class="token punctuation">,</span>
+                    <span class="token property">"start_sha"</span><span class="token operator">:</span> <span class="token string">"cdd6cf0e8e0dd3f6fd3f9435d648ef46927d279b"</span><span class="token punctuation">,</span>
+                    <span class="token property">"head_sha"</span><span class="token operator">:</span> <span class="token string">"f122047bbb0bf887a1aecd13f3dd7f2062913433"</span><span class="token punctuation">,</span>
+                    <span class="token property">"old_path"</span><span class="token operator">:</span> <span class="token string">"Pods/Classes/SwiftCallOC.swift"</span><span class="token punctuation">,</span>
+                    <span class="token property">"new_path"</span><span class="token operator">:</span> <span class="token string">"Pods/Classes/SwiftCallOC.swift"</span><span class="token punctuation">,</span>
+                    <span class="token property">"position_type"</span><span class="token operator">:</span> <span class="token string">"text"</span><span class="token punctuation">,</span>
+                    <span class="token property">"old_line"</span><span class="token operator">:</span> <span class="token null keyword">null</span><span class="token punctuation">,</span>
+                    <span class="token property">"new_line"</span><span class="token operator">:</span> <span class="token number">21</span>
+                <span class="token punctuation">}</span>  
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p>base_sha、start_sha、head_sha可通过获取(获取最新条记录) GET <a href="https://git.yupaopao.com/api/v4/projects/7484/merge%5C_requests/1/versions" target="_blank" rel="noopener noreferrer">https://git.yupaopao.com/api/v4/projects/7484/merge_requests/1/versions<ExternalLinkIcon/></a></p>
+<p>old_path、new_path 可通过获取 GET <a href="https://git.yupaopao.com/api/v4/projects/7484/merge%5C_requests/1/changes" target="_blank" rel="noopener noreferrer">https://git.yupaopao.com/api/v4/projects/7484/merge_requests/1/changes<ExternalLinkIcon/></a></p>
+<blockquote>
+<p><strong>new_line和old_line必须对应diff文件的修改行(增加 修改)</strong>
+<strong>否则会出现接口调用如下错误：</strong>
+{
+&quot;message&quot;: &quot;400 (Bad request) &quot;Note {:line_code=&gt;[&quot;can't be blank&quot;, &quot;must be a valid line code&quot;]}&quot; not given&quot;
+}</p>
+</blockquote>
+<h3 id="_6、kafka异步" tabindex="-1"><a class="header-anchor" href="#_6、kafka异步" aria-hidden="true">#</a> 6、kafka异步</h3>
+<p>kafka相关：</p>
+<blockquote>
+<p><strong>topic</strong>：cr_test_ai
+<strong>key</strong>：cr_ai_invoke、cr_ai_result
+cr_ai_invoke对应分区1（用于异步调用AI接口获取反馈结果 （耗时））
+cr_ai_result对应于分区0 （异步调用 写入comment到gitlab（gitlab官方只提供了 提交一次单行代码建议接口））
+设置重试次数为2，异常时会再次重试。
+设置多线程消费为2，后期可以再做修改</p>
+</blockquote>
+<p><img src="@source/.vuepress/assets/6f0676336f7b87eb6ffd6f34ce8cfee515651e4e.png" alt="输入图片说明"></p>
+<h3 id="_7、redis记录" tabindex="-1"><a class="header-anchor" href="#_7、redis记录" aria-hidden="true">#</a> 7、Redis记录</h3>
+<blockquote>
+<p>key：cr_mr_mrurl （mrurl表示一次mr请求对应的url）</p>
+<ul>
+<li>记录该mr地址的diff_total和AI反馈的行建议comment_total</li>
+<li>调用AI接口处理时记录diff_completed_count数量 （表示已经由AI处理完的diff数量）</li>
+<li>调用gitlab接口回填comment时记录comment_completed_count（表示已经提交到gitlab的数量）</li>
+</ul>
+<p>当处理的数量与总数量相同时 即代表处理完成，如果不相等可做失败兜底（待完善）</p>
+</blockquote>
+<h2 id="三、ai大模型" tabindex="-1"><a class="header-anchor" href="#三、ai大模型" aria-hidden="true">#</a> 三、AI大模型</h2>
+<h3 id="选型" tabindex="-1"><a class="header-anchor" href="#选型" aria-hidden="true">#</a> 选型</h3>
+<p><strong>模型搭建：</strong></p>
+<ul>
+<li><strong>模型</strong>：本地部署大模型+本地知识库</li>
+</ul>
+<p>所有的流程都在内部执行，不会有泄露数据的风险。</p>
+<ul>
+<li><strong>Review的有效性</strong> = 模型选择 + 合适的prompt</li>
+</ul>
+<p>选择模型的参数当然是越多越好，越多的参数也就意味着更高的准确性，但是越多的参数也需要越好的硬件设备。一般7b需要8G内存，13b需要16G内存等等。</p>
+<p>本地机器为32G内存，所以基本上选择模型在32b左右。</p>
+<h3 id="ai返回值" tabindex="-1"><a class="header-anchor" href="#ai返回值" aria-hidden="true">#</a> AI返回值</h3>
+<div class="language-json line-numbers-mode" data-ext="json"><pre v-pre class="language-json"><code><span class="token punctuation">{</span>
+  <span class="token property">"reviews"</span><span class="token operator">:</span> <span class="token punctuation">[</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+    var callback: ((Int) -> Void)?"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"新增的`callback`属性是一个很好的实践，它允许类的使用者自定义行为。但是，最好在文档或注释中说明这个属性的用途和使用方式。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+        callback = { i in"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"这里使用了闭包来初始化`callback`，但闭包内部又调用了`self.printSomething(i)`，这可能会导致循环引用，如果`printSomething`方法内部也持有`self`的强引用的话。建议检查`printSomething`方法实现，确保没有循环引用的问题。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+        self.printSomething(i)"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"如果`printSomething`方法内部有递归调用，需要确保有退出递归的条件，否则可能会导致栈溢出。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"-            let label = UILabel.init(frame: CGRect(x: 0, y: 100, width: self.currentView().frame.size.width, height: self.currentView().frame.size.height - 200))"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"原来的代码被注释掉了，看起来是想移除UILabel的创建。如果这是有意为之，确保移除UILabel后，相关的业务逻辑仍然正确。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+        guard let rootView = UIApplication.shared.delegete?.windows?.first else { return UIView.init() }"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"这里将`UIApplication.shared.keyWindow?.rootViewController?.view`更改为`UIApplication.shared.delegete?.windows?.first`，这个改动可能是为了获取当前活跃的窗口。但是，使用`delegete`可能是一个拼写错误，应该是`delegate`。同时，`windows`应该是`delegate?.windowScenes?.first?.windows?.first`，以确保获取到正确的窗口。"</span>
+    <span class="token punctuation">}</span><span class="token punctuation">,</span>
+    <span class="token punctuation">{</span>
+      <span class="token property">"content"</span><span class="token operator">:</span> <span class="token string">"+    func printSomething(_ i: Int) {"</span><span class="token punctuation">,</span>
+      <span class="token property">"comment"</span><span class="token operator">:</span> <span class="token string">"新增的`printSomething`方法看起来是用于打印信息，但是方法内部的递归调用没有明确的退出条件，这可能会导致无限递归和程序崩溃。需要添加适当的逻辑来终止递归。"</span>
+    <span class="token punctuation">}</span>
+  <span class="token punctuation">]</span>
+<span class="token punctuation">}</span>
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><h3 id="prompt" tabindex="-1"><a class="header-anchor" href="#prompt" aria-hidden="true">#</a> prompt</h3>
+<p>Prompt反馈出diff中的问题应该尽可能多、准确，且输出稳定
+<em><strong>使用的prompt：</strong></em></p>
+<div class="language-python line-numbers-mode" data-ext="py"><pre v-pre class="language-python"><code>        Act <span class="token keyword">as</span> a code reviewer of a GitLab merge request<span class="token punctuation">,</span> providing feedback on the code changes below<span class="token punctuation">.</span>
+        You are provided <span class="token keyword">with</span> the merge request changes <span class="token keyword">in</span> a diff <span class="token builtin">format</span><span class="token punctuation">.</span>
+        The diff which <span class="token keyword">is</span> get <span class="token keyword">from</span> the GitLab API<span class="token punctuation">:</span> api<span class="token operator">/</span>v4<span class="token operator">/</span>projects<span class="token operator">/</span>projectId<span class="token operator">/</span>merge_requests<span class="token operator">/</span>requestId<span class="token operator">/</span>changes<span class="token punctuation">.</span>
+        \n\n
+        Diff of the merge request to review<span class="token punctuation">:</span>
+        \n
+        <span class="token punctuation">{</span>content<span class="token punctuation">}</span>
+        \n\n
+        As a code reviewer<span class="token punctuation">,</span> your task <span class="token keyword">is</span><span class="token punctuation">:</span>
+        <span class="token operator">-</span> Review the code changes <span class="token punctuation">(</span>diffs<span class="token punctuation">)</span> <span class="token keyword">in</span> the patch <span class="token keyword">and</span> provide feedback<span class="token punctuation">.</span>
+        <span class="token operator">-</span> If there are <span class="token builtin">any</span> bugs<span class="token punctuation">,</span> highlight them<span class="token punctuation">.</span> 
+        <span class="token operator">-</span> Does the code do what it says <span class="token keyword">in</span> the commit messages?
+        <span class="token operator">-</span> Do <span class="token keyword">not</span> highlight minor issues <span class="token keyword">and</span> nitpicks<span class="token punctuation">.</span>
+        <span class="token operator">-</span> Do <span class="token keyword">not</span> include <span class="token builtin">any</span> explanations<span class="token punctuation">,</span> only provide a RFC8259 compliant JSON response following this <span class="token builtin">format</span> without deviation<span class="token punctuation">.</span>
+        <span class="token operator">-</span> Provide the response <span class="token keyword">in</span> following JSON <span class="token builtin">format</span><span class="token punctuation">:</span>  <span class="token punctuation">{</span><span class="token punctuation">{</span><span class="token string">"reviews"</span><span class="token punctuation">:</span> <span class="token punctuation">[</span><span class="token punctuation">{</span><span class="token punctuation">{</span><span class="token string">"content"</span><span class="token punctuation">:</span> <span class="token operator">&lt;</span>line_content<span class="token operator">></span><span class="token punctuation">,</span> <span class="token string">"comment"</span><span class="token punctuation">:</span> <span class="token string">"&lt;review comment>"</span><span class="token punctuation">}</span><span class="token punctuation">}</span><span class="token punctuation">]</span><span class="token punctuation">}</span><span class="token punctuation">}</span>
+        <span class="token operator">-</span> the<span class="token operator">&lt;</span>line_content<span class="token operator">></span> must be the original line <span class="token keyword">in</span> Diff<span class="token punctuation">,</span> <span class="token keyword">and</span> there <span class="token keyword">is</span> only one line<span class="token punctuation">.</span> No characters <span class="token keyword">in</span> the line can be omitted<span class="token punctuation">,</span> including <span class="token operator">+</span> <span class="token operator">-</span> spaces<span class="token punctuation">,</span> etc<span class="token punctuation">.</span>
+        <span class="token operator">-</span> please use chinese to give feedback<span class="token punctuation">.</span>`
+</code></pre><div class="line-numbers" aria-hidden="true"><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div><div class="line-number"></div></div></div><p><em><strong>分析prompt：</strong></em>
+<img src="@source/.vuepress/assets/f72f38e9ccc3dc81d76ad01809ed96ef39dec822.png" alt="输入图片说明">
+<strong>该diff地址</strong>：https://git.yupaopao.com/terminal/ios/yuer/YRSwiftDemo/merge_requests/1/diffs</p>
+<p><strong>使用的模型：</strong> kimi</p>
+<p><strong>已知问题：</strong></p>
+<ol>
+<li>
+<p>25行，self.printSomething(i)：闭包里面self导致循环引用。</p>
+</li>
+<li>
+<p>52行，注释的代码及时删除</p>
+</li>
+<li>
+<p>52行，代码注释后，label的初始化被删除了，导致addSubview(label)时label未初始化</p>
+</li>
+<li>
+<p>68行，注释的代码及时删除</p>
+</li>
+<li>
+<p>68行，单词错误delegete -》 delegate</p>
+</li>
+<li>
+<p>68行，UIApplication.shared.delegete?.windows?.first不是获取当前window最佳实践，应该是UIApplication.shared.delegete?.window</p>
+</li>
+<li>
+<p>82行，递归调用 printSomething，缺乏终止条件</p>
+<p><strong>对比prompt：</strong></p>
+</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Prompt</th>
+<th>AI反馈</th>
+<th>有效性</th>
+<th>评分</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>请审查以下提交的代码变更，并提供一个 JSON 格式的总结，其中包括每个修改的行号line和建议的优化点suggestion。suggestion 中请带上最佳示例。请始终使用中文。不要包含总结或其他解释，只提供行号和建议。 其中给到的内容中，以@@开头的行为提示行，其他行为源代码。 以下是代码变更内容： {content}</td>
+<td><code v-pre>{ &quot;-17,6&quot;: { &quot;line&quot;: 17, &quot;suggestion&quot;: &quot;初始化闭包时，建议使用更明确的参数名称以提高代码可读性。例如：callback = { number in self.printSomething(number) }&quot; }, &quot;-39,7&quot;: { &quot;line&quot;: 39, &quot;suggestion&quot;: &quot;注释掉的代码应该被删除，以保持代码的整洁。如果该代码段未来可能会用到，建议将其移动到注释区域或者使用版本控制系统进行管理。&quot; }, &quot;-55,7&quot;: { &quot;line&quot;: 55, &quot;suggestion&quot;: &quot;使用UIApplication.shared.windows.first?.rootViewController?.view替代UIApplication.shared.keyWindow?.rootViewController?.view可以避免对keyWindow的依赖，因为keyWindow可能在某些情况下为nil。&quot; }, &quot;-64,6&quot;: { &quot;line&quot;: 64, &quot;suggestion&quot;: &quot;在printSomething函数中，存在递归调用自身但没有退出条件，这可能导致无限递归。建议添加适当的退出条件或者使用循环结构来替代递归。&quot; }}</code></td>
+<td>4条建议：1.5条有效</td>
+<td>40分</td>
+</tr>
+<tr>
+<td><code v-pre>Act as a code reviewer of a GitLab merge request, providing feedback on the code changes below. You are provided with the merge request changes in a diff format. The diff which is get from the GitLab API: api/v4/projects/projectId/merge_requests/requestId/changes. \n\n Diff of the merge request to review: \n {content} \n\n As a code reviewer, your task is: - Review the code changes (diffs) in the patch and provide feedback. - If there are any bugs, highlight them. - Does the code do what it says in the commit messages? - Do not highlight minor issues and nitpicks. - Return the entire response using JSON format, no header tag. only JSON, no markdown format. - Provide the response in following JSON format: {{&quot;reviews&quot;: [{{&quot;line&quot;: &lt;line_number&gt;, &quot;content&quot;: &lt;line_content&gt;, &quot;comment&quot;: &quot;&lt;review comment&gt;&quot;}}]}} - If no suggestions are provided, please give good feedback. - please use chinese to give feedback.</code></td>
+<td><code v-pre>{ &quot;reviews&quot;: [ { &quot;line&quot;: 18, &quot;content&quot;: &quot;callback = { i in self.printSomething(i) }&quot;, &quot;comment&quot;: &quot;这里初始化闭包时，没有使用self来捕获当前类的实例，这可能会导致在闭包中无法正确引用到当前类的实例。建议使用 [weak self] 来避免循环引用。&quot; }, { &quot;line&quot;: 49, &quot;content&quot;: &quot;// let label = UILabel.init(frame: CGRect(x: 0, y: 100, width: self.currentView().frame.size.width, height: self.currentView().frame.size.height - 200))&quot;, &quot;comment&quot;: &quot;这行代码被注释掉了，看起来是之前创建UILabel的代码。如果这是有意为之的更改，请确保相关的功能逻辑已经更新，以适应这一更改。如果只是临时的更改，需要确认是否需要恢复这行代码。&quot; }, { &quot;line&quot;: 56, &quot;content&quot;: &quot;guard let rootView = UIApplication.shared.delegete?.windows?.first else { return UIView.init() }&quot;, &quot;comment&quot;: &quot;这里使用了UIApplication.shared.delegete，可能存在拼写错误，正确的应该是delegate。另外，UIApplication.shared.delegate?.window 通常是获取当前应用的主窗口，而不是windows数组。请检查这里的意图是否是获取主窗口，如果是的话，应该使用window而不是windows。&quot; }, { &quot;line&quot;: 70, &quot;content&quot;: &quot;printSomething(i)&quot;, &quot;comment&quot;: &quot;这个方法似乎是一个递归调用，但没有看到递归结束的条件，这可能会导致无限递归，从而引发栈溢出。建议添加递归结束的条件或者使用其他方式来实现预期的功能。&quot; } ]}</code></td>
+<td>5条建议：5条有效</td>
+<td>80分</td>
+</tr>
+<tr>
+<td><code v-pre>Your task is to review pull requests. Instructions: - Provide the response in following JSON format: {{&quot;reviews&quot;: [{{&quot;line&quot;: &lt;line_number&gt;, &quot;content&quot;: &lt;line_content&gt;, &quot;comment&quot;: &quot;&lt;review comment&gt;&quot;}}]}} - Do not give positive comments or compliments. - Provide comments and suggestions ONLY if there is something to improve, otherwise &quot;reviews&quot; should be an empty array. - Write the comment in GitHub Markdown format. - Use the given description only for the overall context and only comment the code. - IMPORTANT: NEVER suggest adding comments to the code. - Do not include any explanations, only provide a RFC8259 compliant JSON response following this format without deviation. - Please use chinese to give feedback. - Ensure that the </code>line_number<code v-pre>in the JSON response corresponds to the line numbers in the</code>new_path<code v-pre> file, not the original file. Verify the line numbers and their corresponding code carefully. Review the following code diff in the file &quot;{file_path}&quot; and take the pull request title and description into account when writing the response. Pull request title: {title} Pull request description: --- {description} --- Git diff to review: \</code>``diff {content} ```</td>
+<td><code v-pre>{ &quot;reviews&quot;: [ { &quot;line&quot;: 19, &quot;content&quot;: &quot;callback = { i in\n self.printSomething(i)\n }&quot;, &quot;comment&quot;: &quot;初始化闭包时直接调用printSomething方法可能会导致无限递归，应该避免这种情况。&quot; }, { &quot;line&quot;: 49, &quot;content&quot;: &quot;// let label = UILabel.init(frame: CGRect(x: 0, y: 100, width: self.currentView().frame.size.width, height: self.currentView().frame.size.height - 200))&quot;, &quot;comment&quot;: &quot;注释掉的代码应该被删除，以保持代码的整洁性。&quot; }, { &quot;line&quot;: 55, &quot;content&quot;: &quot;guard let rootView = UIApplication.shared.delegete?.windows?.first else { return UIView.init() }&quot;, &quot;comment&quot;: &quot;这里使用了delegete，可能是拼写错误，正确的应该是delegate。&quot; }, { &quot;line&quot;: 70, &quot;content&quot;: &quot;printSomething(i)&quot;, &quot;comment&quot;: &quot;递归调用printSomething可能会导致栈溢出，应该提供一个终止条件或使用循环结构。&quot; } ]}</code></td>
+<td>4条建议：3条有效，1条重复</td>
+<td>75分</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+</div></template>
+
+
